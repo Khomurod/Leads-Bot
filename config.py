@@ -14,3 +14,9 @@ META_PAGE_ACCESS_TOKEN: str = os.environ["META_PAGE_ACCESS_TOKEN"]  # Page acces
 
 # Server
 PORT: int = int(os.environ.get("PORT", 8000))
+
+# RingCentral SMS (optional — leave empty to disable)
+RC_CLIENT_ID: str = os.environ.get("RC_CLIENT_ID", "")
+RC_CLIENT_SECRET: str = os.environ.get("RC_CLIENT_SECRET", "")
+RC_JWT_TOKEN: str = os.environ.get("RC_JWT_TOKEN", "")
+RC_FROM_NUMBER: str = os.environ.get("RC_FROM_NUMBER", "")

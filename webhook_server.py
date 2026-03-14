@@ -16,6 +16,7 @@ from fastapi.responses import PlainTextResponse
 
 from config import META_APP_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, WEBHOOK_VERIFY_TOKEN
 from graph import fetch_lead, format_lead_message, fetch_sender_profile, format_messenger_message
+from sms import send_sms
 
 import httpx
 
@@ -152,9 +153,10 @@ async def retry_lead(leadgen_id: str):
 
 
 async def _process_lead(leadgen_id: str) -> str:
-    """Fetch lead data from Graph API and send to Telegram.
+    """Fetch lead data from Graph API, send to Telegram, and auto-SMS.
     
     Returns a status string. Never raises — always sends SOMETHING to Telegram.
+    SMS is a bonus step that never affects the Telegram flow.
     """
     logger.info("Processing lead ID: %s", leadgen_id)
 
@@ -187,10 +189,41 @@ async def _process_lead(leadgen_id: str) -> str:
     try:
         logger.info("Sending Telegram message for lead %s", leadgen_id)
         await _send_telegram(message)
-        return "sent_ok"
     except Exception as exc:
         logger.error("Telegram send failed for lead %s: %s", leadgen_id, exc)
         return "telegram_error"
+
+    # ── Auto-SMS via RingCentral (never affects Telegram flow) ──
+    try:
+        from graph import _safe_field_value
+        field_map = {}
+        for field in lead_data.get("field_data", []):
+            name = field.get("name", "")
+            value = _safe_field_value(field)
+            if name and value:
+                field_map[name] = value
+
+        phone = field_map.get("phone_number") or field_map.get("phone", "")
+        full_name = field_map.get("full_name", "Driver")
+        first_name = full_name.split()[0] if full_name else "Driver"
+
+        if phone:
+            sms_text = (
+                f"Hello {first_name}, this is Tom with Wenze trucking company "
+                f"and thanks for applying to our OTR position. "
+                f"Can I call you right now to explain the details?"
+            )
+            sent = await send_sms(to=phone, message=sms_text)
+            if sent:
+                logger.info("SMS sent to %s for lead %s", phone, leadgen_id)
+            else:
+                logger.info("SMS skipped/failed for lead %s (phone: %s)", leadgen_id, phone)
+        else:
+            logger.info("No phone number for lead %s — SMS skipped.", leadgen_id)
+    except Exception as exc:
+        logger.warning("SMS error for lead %s (non-critical): %s", leadgen_id, exc)
+
+    return "sent_ok"
 
 
 async def _process_messenger_event(event: dict) -> None:
