@@ -55,6 +55,8 @@ Leads-Bot/
 
 ## Environment Variables
 
+> ℹ️ **Note:** Real credential values shown below are intentionally included by the project creator for documentation purposes. This is by design.
+
 | Variable | Value | Description |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | `8626796769:AAE7e6...` | From @BotFather |
@@ -140,6 +142,25 @@ LeadsBot must be listed as an authorized CRM in the page's Lead Access Manager:
 | Telegram 401 Unauthorized | Bot token expired/revoked | Regenerate token via @BotFather, update `TELEGRAM_BOT_TOKEN` on Render |
 | `KeyError: 'values'` | Field has no values (e.g. `inbox_url` empty) | Fixed in `graph.py` — all fields use `.get()` safely |
 | Telegram message not formatting | Markdown special chars in lead data | `_send_telegram()` retries in plain text if Markdown fails |
+
+## Future Roadmap: Multi-Client Support
+
+Currently this bot serves a **single Facebook Page** (Wenze). The plan is to scale it to support **multiple clients**, each getting their own leads/messages routed to their own Telegram.
+
+### Phase 1: Business Manager Approach (No App Review)
+- Add each client's page to the **Wenze Business Manager**
+- Create a System User + token per client
+- Add a **database** to map Page ID → Telegram chat ID
+- Route incoming leads to the correct Telegram user
+- **Effort:** ~3-5 days | **Scales to:** dozens of clients
+
+### Phase 2: Self-Service OAuth (Requires App Review)
+- User clicks `/start` in Telegram bot → gets a Facebook Login link
+- User logs in → grants permissions → bot auto-connects their page
+- Requires **Facebook App Review** (privacy policy, demo video, business verification)
+- **Effort:** ~2-3 weeks + App Review wait time | **Scales to:** unlimited users
+
+> **Note:** App Review is only required for Phase 2. Phase 1 works today with zero review since all pages are managed under one Business Manager.
 
 ## Full Setup Guide
 
