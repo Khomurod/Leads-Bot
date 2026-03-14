@@ -1,8 +1,9 @@
 """
 FastAPI webhook server.
-- GET  /webhook  → Facebook verification challenge
-- POST /webhook  → Receive lead notifications
-- GET  /health   → Render health check
+- GET  /webhook          → Facebook verification challenge
+- POST /webhook          → Receive lead notifications
+- GET  /health           → Render health check
+- GET  /retry/{lead_id}  → Re-fetch and resend a failed lead
 """
 import hashlib
 import hmac
@@ -36,17 +37,28 @@ def _verify_signature(payload: bytes, signature_header: str) -> bool:
 
 
 async def _send_telegram(text: str) -> None:
-    """Send a message to Telegram via Bot API."""
+    """Send a message to Telegram via Bot API.
+    
+    If Markdown parse fails, retries without parse_mode so the message
+    is always delivered even if formatting chars cause issues.
+    """
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
         "parse_mode": "Markdown",
     }
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(url, json=payload)
         if not resp.is_success:
-            logger.error("Telegram send failed: %s", resp.text)
+            logger.warning("Telegram Markdown send failed, retrying without parse_mode: %s", resp.text)
+            # Retry without Markdown in case special chars broke the formatting
+            payload.pop("parse_mode", None)
+            resp2 = await client.post(url, json=payload)
+            if not resp2.is_success:
+                logger.error("Telegram send failed completely: %s", resp2.text)
+            else:
+                logger.info("Telegram message sent (plain text fallback).")
         else:
             logger.info("Telegram message sent successfully.")
 
@@ -102,20 +114,57 @@ async def receive_webhook(request: Request):
             if not leadgen_id:
                 continue
 
-            logger.info("Processing new lead ID: %s", leadgen_id)
-
-            try:
-                lead_data = await fetch_lead(leadgen_id)
-                logger.info("Graph API returned lead data for %s", leadgen_id)
-                message = format_lead_message(lead_data)
-                
-                logger.info("Sending Telegram message for lead %s", leadgen_id)
-                await _send_telegram(message)
-                
-            except Exception as exc:
-                logger.error("CRITICAL ERROR processing lead %s: %s", leadgen_id, exc)
-                # Notify anyway with minimal info so we don't lose the lead completely
-                fallback_msg = f"🔔 *FACEBOOK LEAD RECEIVED!*\n\n🆔 Lead ID: `{leadgen_id}`\n⚠️ I could not fetch the details from Graph API. Please check your Meta Developer App credentials and page permissions.\n\nError: `{exc}`"
-                await _send_telegram(fallback_msg)
+            await _process_lead(leadgen_id)
 
     return {"status": "ok"}
+
+
+@app.get("/retry/{leadgen_id}")
+async def retry_lead(leadgen_id: str):
+    """Manually retry fetching and sending a lead that previously failed."""
+    logger.info("Manual retry requested for lead ID: %s", leadgen_id)
+    result = await _process_lead(leadgen_id)
+    return {"status": "ok", "lead_id": leadgen_id, "result": result}
+
+
+async def _process_lead(leadgen_id: str) -> str:
+    """Fetch lead data from Graph API and send to Telegram.
+    
+    Returns a status string. Never raises — always sends SOMETHING to Telegram.
+    """
+    logger.info("Processing lead ID: %s", leadgen_id)
+
+    try:
+        lead_data = await fetch_lead(leadgen_id)
+        logger.info("Graph API returned lead data for %s", leadgen_id)
+    except Exception as exc:
+        logger.error("Graph API fetch failed for lead %s: %s", leadgen_id, exc)
+        fallback_msg = (
+            f"🔔 *FACEBOOK LEAD RECEIVED!*\n\n"
+            f"🆔 Lead ID: `{leadgen_id}`\n"
+            f"⚠️ Could not fetch details from Graph API.\n"
+            f"Error: `{exc}`"
+        )
+        await _send_telegram(fallback_msg)
+        return "sent_fallback_fetch_error"
+
+    try:
+        message = format_lead_message(lead_data)
+    except Exception as exc:
+        logger.error("Format error for lead %s: %s", leadgen_id, exc)
+        # Dump raw data so the lead is never lost
+        raw = json.dumps(lead_data, indent=2, ensure_ascii=False)
+        message = (
+            f"🔔 *FACEBOOK LEAD RECEIVED!*\n\n"
+            f"🆔 Lead ID: `{leadgen_id}`\n"
+            f"⚠️ Could not format lead data.\n"
+            f"Raw data:\n```\n{raw[:3000]}\n```"
+        )
+
+    try:
+        logger.info("Sending Telegram message for lead %s", leadgen_id)
+        await _send_telegram(message)
+        return "sent_ok"
+    except Exception as exc:
+        logger.error("Telegram send failed for lead %s: %s", leadgen_id, exc)
+        return "telegram_error"
