@@ -1,132 +1,180 @@
 # Full Setup Guide — Facebook Leads → Telegram Bot
 
-Follow every step in order. No tech experience needed.
+> This documents the **exact steps** used to set up the live integration.
+> Follow in order if you ever need to rebuild from scratch.
 
 ---
 
-## PART 1 — Get Your Telegram Chat ID
-
-You need your personal Telegram ID so the bot knows where to send leads.
-
-1. Open Telegram and search for **@userinfobot**
-2. Press **Start**
-3. It will reply with your user ID, e.g. `Id: 123456789`
-4. Copy that number — this is your `TELEGRAM_CHAT_ID`
-
----
-
-## PART 2 — Push Code to GitHub
-
-You need the code on GitHub so Render can deploy it.
-
-1. Go to [github.com](https://github.com) → click **New repository**
-2. Name it `leads-bot`, leave it **Private**, click **Create**
-3. Open a terminal in your `d:\SH\Leads-Bot` folder and run:
-
-```bash
-git add .
-git commit -m "Initial leads bot"
-git remote add origin https://github.com/YOUR_USERNAME/leads-bot.git
-git push -u origin main
-```
-
----
-
-## PART 3 — Deploy on Render
-
-1. Go to [render.com](https://render.com) → **Sign up / Log in** (free account is fine)
-2. Click **New +** → **Web Service**
-3. Connect your GitHub account → select your `leads-bot` repository
-4. Render will auto-detect the settings from `render.yaml`. Confirm:
-   - **Build Command:** `pip install -r requirements.txt`
-   - **Start Command:** `python main.py`
-5. Scroll down to **Environment Variables** — add these one by one:
+## Credentials Reference
 
 | Key | Value |
 |-----|-------|
-| `TELEGRAM_BOT_TOKEN` | `8626796769:AAE7e6PHADIlMnA0QNpnan196NYW007LyGc` |
-| `TELEGRAM_CHAT_ID` | *(your ID from Part 1)* |
-| `WEBHOOK_VERIFY_TOKEN` | `my_super_secret_verify_token_123` *(or any secret phrase you choose)* |
-| `META_APP_SECRET` | *(from Part 4, Step 6)* |
-| `META_PAGE_ACCESS_TOKEN` | *(from Part 4, Step 12)* |
-
-6. Click **Create Web Service** — wait ~2 minutes for it to deploy
-7. Copy your URL — it looks like: `https://leads-bot-xxxx.onrender.com`
+| Render URL | `https://leads-bot-e6x5.onrender.com` |
+| Render Service ID | `srv-d6h0q3haae7s73epqf2g` |
+| Meta App ID | `1493927455591564` |
+| Meta App Secret | `174654afba5dc1a3ccdc3afcdbd4d6ca` |
+| Meta App Name | LeadsBot |
+| Facebook Page | Wenze Transportation Sevices |
+| Page ID | `1012150671970890` |
+| Business ID | `1373179280914689` |
+| Business Name | Wenze |
+| System User | `wenzeleadsbot` (Admin) |
+| Webhook Verify Token | `my_super_secret_verify_token_123` |
+| Telegram Bot | @WenzeLeadBots |
+| Telegram Chat ID | `2117922421` |
 
 ---
 
-## PART 4 — Set Up Facebook (Meta) App
+## PART 1 — Deploy on Render
 
-This is the bridge that sends leads from Facebook to your bot.
+1. Go to [render.com](https://render.com) → New → **Web Service**
+2. Connect GitHub → select `Leads-Bot` repository
+3. Render auto-reads `render.yaml`. Confirm settings:
+   - **Build:** `pip install -r requirements.txt`
+   - **Start:** `python main.py`
+4. Add **Environment Variables**:
 
-### A. Create a Meta Developer Account
+| Key | Value |
+|-----|-------|
+| `TELEGRAM_BOT_TOKEN` | *(from @BotFather)* |
+| `TELEGRAM_CHAT_ID` | `2117922421` |
+| `WEBHOOK_VERIFY_TOKEN` | `my_super_secret_verify_token_123` |
+| `META_APP_SECRET` | `174654afba5dc1a3ccdc3afcdbd4d6ca` |
+| `META_PAGE_ACCESS_TOKEN` | *(generate in Part 3)* |
+
+5. Click **Create Web Service** — wait ~2 min for deploy
+6. Note your URL: `https://leads-bot-xxxx.onrender.com`
+
+---
+
+## PART 2 — Create & Configure Meta App
+
+### A. Create the App
 
 1. Go to [developers.facebook.com](https://developers.facebook.com)
-2. Log in with your Facebook account
-3. Click **Get Started** if you haven't used it before
-4. Accept the terms
+2. Click **My Apps → Create App**
+3. Select **Other** → **Business** → Next
+4. Name: `LeadsBot`, Business: `Wenze` → Create
 
-### B. Create a New App
+### B. Add Webhooks Product
 
-1. Click **My Apps** → **Create App**
-2. Choose **Business** as the app type → click **Next**
-3. Give it a name (e.g. `Leads Webhook`) → click **Create App**
+1. Dashboard → **Add Product** → find **Webhooks** → Set Up
+2. Dropdown → select **Page** → Subscribe to this object
+3. Fill in:
+   - **Callback URL:** `https://leads-bot-e6x5.onrender.com/webhook`
+   - **Verify Token:** `my_super_secret_verify_token_123`
+4. Click **Verify and Save** ✅
+5. Find **leadgen** in the field list → click **Subscribe**
 
-### C. Get Your App Secret
+### C. Fill Required App Settings
 
-1. In your app dashboard, go to **Settings → Basic** (left sidebar)
-2. Find **App Secret** → click **Show** → copy it
-3. This is your `META_APP_SECRET` — add it to Render now
+1. Go to **Settings → Basic**
+2. Fill in:
+   - **Privacy Policy URL:** `https://wenzeinvestments.com/privacy-policy.html`
+   - **Category:** Business and Pages
+   - Upload an App Icon
+3. Click **Save Changes**
 
-### D. Add the Leads Retrieval Product
+### D. Publish App to Live Mode
 
-1. In your app dashboard, click **Add Product** (left sidebar)
-2. Find **Webhooks** → click **Set Up**
-3. In the dropdown, choose **Page**
-4. Click **Subscribe to this object**
-5. Fill in:
-   - **Callback URL:** `https://leads-bot-xxxx.onrender.com/webhook`  
-     *(replace with your actual Render URL)*
-   - **Verify Token:** `my_super_secret_verify_token_123`  
-     *(must match `WEBHOOK_VERIFY_TOKEN` in Render)*
-6. Click **Verify and Save** — Facebook will call your server and verify it ✅
-7. Find **leadgen** in the list of fields → check its box → click **Subscribe**
+> ⚠️ **Critical:** In Development mode, Facebook will NOT deliver webhooks for real leads (only for app admins). You MUST publish to Live mode.
 
-### E. Get Your Page Access Token
-
-1. In the left sidebar, click **Tools → Graph API Explorer**
-2. In the top-right dropdown, select your **Facebook Page** (not your personal account)
-3. Click **Generate Access Token** → grant all permissions
-4. Copy the long token — this is your `META_PAGE_ACCESS_TOKEN`
-5. Go to Render → your service → **Environment** → update `META_PAGE_ACCESS_TOKEN` → **Save** (Render will redeploy)
-
-> ⚠️ **Important:** The default token expires in ~1 hour. To get a permanent (never-expiring) token:
-> 1. Use Graph API Explorer — click **i** next to the token → click **Open in Access Token Tool**
-> 2. Click **Extend Access Token** → copy the new long-lived token
-> 3. Exchange it for a Page token that never expires using:  
->    `GET /YOUR_PAGE_ID?fields=access_token&access_token=LONG_LIVED_USER_TOKEN`  
->    (run this in Graph API Explorer)
+1. Left sidebar → **App Review → Publish**
+2. Click **Make Live** or **Publish**
+3. Confirm: "Your app was successfully published" 🎉
 
 ---
 
-## PART 5 — Test It
+## PART 3 — Generate Never-Expiring Page Access Token
 
-### Quick Verification Test
+> Regular user tokens expire in 1 hour. Use a **System User** for a permanent token.
 
-In your browser, open:
-```
-https://leads-bot-xxxx.onrender.com/webhook?hub.mode=subscribe&hub.verify_token=my_super_secret_verify_token_123&hub.challenge=hello
-```
-You should see: `hello`  
-This means the server is running and the token matches ✅
+### A. Create System User
 
-### Test a Real Lead
+1. Go to [business.facebook.com](https://business.facebook.com)
+2. Settings (gear icon) → **System Users** (under Users section)
+3. Click **Add** → Name: `wenzeleadsbot`, Role: **Admin** → Create
+4. Click **Add Assets** → Pages → select **Wenze Transportation Sevices**
+5. Enable **Full Control** → Save
 
-1. In Meta for Developers → your App → **Leads Ads Testing Tool**  
-   *(or search "Lead Ads Testing Tool" in the left sidebar)*
-2. Select your **Page** and **Lead Form**
-3. Click **Preview Form** → fill it out → submit
-4. Within a few seconds you should receive a Telegram message from @wenzeleadbot 🎉
+### B. Assign the App
+
+1. System Users → `wenzeleadsbot` → **Assign Assets**
+2. Select **Apps** → find **LeadsBot** → toggle to enable → Save
+
+### C. Generate Token
+
+1. System Users → `wenzeleadsbot` → **Generate New Token**
+2. Select App: **LeadsBot**
+3. Select permissions (add ALL of these):
+   - `leads_retrieval`
+   - `pages_manage_metadata`
+   - `pages_read_engagement`
+   - `pages_show_list`
+4. Click **Generate Token** → copy it immediately
+5. Go to Render → Environment → update `META_PAGE_ACCESS_TOKEN` → Save → Redeploy
+
+---
+
+## PART 4 — Subscribe App to Page Webhook
+
+This tells Facebook to send lead events from the Wenze page to LeadsBot.
+
+1. Go to [Graph API Explorer](https://developers.facebook.com/tools/explorer/)
+2. Select App: **LeadsBot**
+3. Select token: the System User token (`META_PAGE_ACCESS_TOKEN`)
+4. Change method to **POST**, path to: `1012150671970890/subscribed_apps`
+5. Add parameter: `subscribed_fields` = `leadgen`
+6. Click **Submit** → should return `{"success": true}` ✅
+
+To verify:
+- Method: **GET**, path: `1012150671970890/subscribed_apps`
+- Should show LeadsBot subscribed to `leadgen`
+
+---
+
+## PART 5 — Lead Access Manager
+
+> Without this step, leads show as "Failure: CRM access has been revoked."
+
+1. Go to **Business Settings** (business.facebook.com → gear icon)
+2. Left sidebar → **Integrations → Leads Access**
+3. Find **Wenze Transportation Sevices** → click **Details**
+4. Click the **CRMs** tab
+5. Click **Assign CRM** → select **LeadsBot** → Confirm ✅
+
+---
+
+## PART 6 — Test the Integration
+
+1. Go to [Lead Ads Testing Tool](https://developers.facebook.com/tools/lead-ads-testing)
+2. Select page: **Wenze Transportation Sevices**
+3. Check **Page Diagnostics** — LeadsBot should show a green ✅ (not ⚠️)
+4. Select Product: **Lead Retrieval**, Form: **Company Driver EN**
+5. Click **Delete lead** (if existing), then **Create lead**
+6. Click **Track status** — LeadsBot should show **Success**
+7. Check Telegram — message should arrive within seconds 🎉
+
+---
+
+## PART 7 — Keep-Alive (Anti-Sleep)
+
+Render Free tier sleeps after 15 minutes of inactivity, causing the first lead to be missed.
+
+**Using cron-job.org (fastest to set up):**
+
+1. Sign up at [cron-job.org](https://cron-job.org)
+2. Create Cronjob:
+   - Title: `LeadsBot Ping`
+   - URL: `https://leads-bot-e6x5.onrender.com/health`
+   - Schedule: every **10 minutes**
+3. Save
+
+**Using Koyeb:**
+
+1. New Service → Docker → Image: `alpine:latest`
+2. Command: `sh -c "while true; do wget -qO- https://leads-bot-e6x5.onrender.com/health; sleep 600; done"`
+3. Deploy
 
 ---
 
@@ -134,7 +182,25 @@ This means the server is running and the token matches ✅
 
 | Problem | Solution |
 |---------|----------|
-| Render not starting | Check the **Logs** tab in Render for errors |
-| Verification failed | Make sure `WEBHOOK_VERIFY_TOKEN` in Render matches what you typed in Meta |
-| No Telegram message | Check `META_PAGE_ACCESS_TOKEN` is valid and not expired |
-| Bot sends but wrong chat | Double-check `TELEGRAM_CHAT_ID` using @userinfobot |
+| Lead "Pending" forever | App was in Development mode → publish to Live mode |
+| "CRM access revoked" failure | Add LeadsBot to Lead Access Manager (Part 5) |
+| No webhook received on Render | Service was sleeping → ping `/health` to wake up, then retry lead |
+| Telegram 401 Unauthorized | Token revoked → regenerate via @BotFather, update Render env var |
+| `KeyError: 'values'` | Old bug, fixed in graph.py → fields now use `.get()` safely |
+| Wenze page not in System User dropdown | Make sure System User has the page assigned as an asset |
+| Webhook verify failed | Check `WEBHOOK_VERIFY_TOKEN` matches exactly in both Render and Meta |
+
+## Retry a Failed Lead
+
+If any lead fails, call the retry endpoint directly:
+
+```
+https://leads-bot-e6x5.onrender.com/retry/{LEAD_ID}
+```
+
+Example:
+```
+https://leads-bot-e6x5.onrender.com/retry/909818275177706
+```
+
+Expected: `{"status":"ok","lead_id":"...","result":"sent_ok"}`
