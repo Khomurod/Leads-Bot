@@ -85,10 +85,10 @@ async def receive_webhook(request: Request):
 
     try:
         data = json.loads(body)
+        logger.info("Webhook received raw payload: %s", data)
     except json.JSONDecodeError:
+        logger.error("Failed to decode JSON body: %s", body)
         raise HTTPException(status_code=400, detail="Bad JSON")
-
-    logger.info("Webhook received: %s", data)
 
     if data.get("object") != "page":
         return {"status": "ignored"}
@@ -102,17 +102,20 @@ async def receive_webhook(request: Request):
             if not leadgen_id:
                 continue
 
-            logger.info("New lead ID: %s", leadgen_id)
+            logger.info("Processing new lead ID: %s", leadgen_id)
 
             try:
                 lead_data = await fetch_lead(leadgen_id)
+                logger.info("Graph API returned lead data for %s", leadgen_id)
                 message = format_lead_message(lead_data)
+                
+                logger.info("Sending Telegram message for lead %s", leadgen_id)
                 await _send_telegram(message)
+                
             except Exception as exc:
-                logger.error("Error processing lead %s: %s", leadgen_id, exc)
-                # Notify anyway with minimal info
-                await _send_telegram(
-                    f"🔔 *New Facebook Lead!*\n🆔 Lead ID: `{leadgen_id}`\n⚠️ Could not fetch details: {exc}"
-                )
+                logger.error("CRITICAL ERROR processing lead %s: %s", leadgen_id, exc)
+                # Notify anyway with minimal info so we don't lose the lead completely
+                fallback_msg = f"🔔 *FACEBOOK LEAD RECEIVED!*\n\n🆔 Lead ID: `{leadgen_id}`\n⚠️ I could not fetch the details from Graph API. Please check your Meta Developer App credentials and page permissions.\n\nError: `{exc}`"
+                await _send_telegram(fallback_msg)
 
     return {"status": "ok"}
