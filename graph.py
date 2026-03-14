@@ -108,3 +108,43 @@ def format_lead_message(lead_data: dict) -> str:
             f"⚠️ Could not format this lead cleanly.\n"
             f"Raw data:{raw_fields}"
         )
+
+
+async def fetch_sender_profile(sender_id: str) -> dict:
+    """Fetch a Messenger sender's profile info (name) from Graph API.
+    
+    Returns dict with first_name, last_name, or empty dict on failure.
+    """
+    url = f"{GRAPH_BASE}/{sender_id}"
+    params = {
+        "access_token": META_PAGE_ACCESS_TOKEN,
+        "fields": "first_name,last_name,name,profile_pic",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, params=params)
+            if resp.is_success:
+                return resp.json()
+            else:
+                logger.warning("Could not fetch sender profile for %s: %s", sender_id, resp.text)
+                return {}
+    except Exception as exc:
+        logger.warning("Error fetching sender profile %s: %s", sender_id, exc)
+        return {}
+
+
+def format_messenger_message(sender_profile: dict, message_text: str, sender_id: str) -> str:
+    """Format a Messenger lead notification for Telegram."""
+    first = sender_profile.get("first_name", "")
+    last = sender_profile.get("last_name", "")
+    name = f"{first} {last}".strip() or sender_profile.get("name", "Unknown")
+
+    lines = [
+        "💬 *New Messenger Lead!*\n",
+        f"👤 Name: {name}",
+        f"🆔 Sender ID: `{sender_id}`",
+        f"\n📩 Message:",
+        message_text or "(no text)",
+        f"\n📥 Inbox: https://business.facebook.com/latest/{sender_id}?navref=threadviewbypsid",
+    ]
+    return "\n".join(lines)

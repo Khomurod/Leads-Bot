@@ -1,7 +1,7 @@
 """
 FastAPI webhook server.
 - GET  /webhook          → Facebook verification challenge
-- POST /webhook          → Receive lead notifications
+- POST /webhook          → Receive lead notifications + Messenger messages
 - GET  /health           → Render health check
 - GET  /retry/{lead_id}  → Re-fetch and resend a failed lead
 """
@@ -9,12 +9,13 @@ import hashlib
 import hmac
 import json
 import logging
+from collections import OrderedDict
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
 from config import META_APP_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, WEBHOOK_VERIFY_TOKEN
-from graph import fetch_lead, format_lead_message
+from graph import fetch_lead, format_lead_message, fetch_sender_profile, format_messenger_message
 
 import httpx
 
@@ -22,6 +23,26 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Leads Webhook")
+
+# ── De-duplication: track seen Messenger senders ──────────────────
+# Only notify on the FIRST message from each new sender.
+# Uses an OrderedDict as an LRU cache (max 5000 entries) so memory stays bounded.
+MAX_SEEN = 5000
+_seen_senders: OrderedDict[str, bool] = OrderedDict()
+
+
+def _is_new_sender(sender_id: str) -> bool:
+    """Return True if this sender hasn't messaged before (first contact)."""
+    if sender_id in _seen_senders:
+        # Move to end (most recent)
+        _seen_senders.move_to_end(sender_id)
+        return False
+    # New sender — track them
+    _seen_senders[sender_id] = True
+    # Evict oldest if over limit
+    while len(_seen_senders) > MAX_SEEN:
+        _seen_senders.popitem(last=False)
+    return True
 
 
 def _verify_signature(payload: bytes, signature_header: str) -> bool:
@@ -52,7 +73,6 @@ async def _send_telegram(text: str) -> None:
         resp = await client.post(url, json=payload)
         if not resp.is_success:
             logger.warning("Telegram Markdown send failed, retrying without parse_mode: %s", resp.text)
-            # Retry without Markdown in case special chars broke the formatting
             payload.pop("parse_mode", None)
             resp2 = await client.post(url, json=payload)
             if not resp2.is_success:
@@ -86,7 +106,7 @@ async def verify_webhook(request: Request):
 
 @app.post("/webhook")
 async def receive_webhook(request: Request):
-    """Facebook lead notification (POST)."""
+    """Facebook webhook: handles both leadgen and Messenger events."""
     body = await request.body()
 
     # Verify signature
@@ -106,6 +126,7 @@ async def receive_webhook(request: Request):
         return {"status": "ignored"}
 
     for entry in data.get("entry", []):
+        # ── Handle Lead Ad form submissions (leadgen) ──
         for change in entry.get("changes", []):
             if change.get("field") != "leadgen":
                 continue
@@ -113,8 +134,11 @@ async def receive_webhook(request: Request):
             leadgen_id = value.get("leadgen_id")
             if not leadgen_id:
                 continue
-
             await _process_lead(leadgen_id)
+
+        # ── Handle Messenger messages ──
+        for messaging_event in entry.get("messaging", []):
+            await _process_messenger_event(messaging_event)
 
     return {"status": "ok"}
 
@@ -152,7 +176,6 @@ async def _process_lead(leadgen_id: str) -> str:
         message = format_lead_message(lead_data)
     except Exception as exc:
         logger.error("Format error for lead %s: %s", leadgen_id, exc)
-        # Dump raw data so the lead is never lost
         raw = json.dumps(lead_data, indent=2, ensure_ascii=False)
         message = (
             f"🔔 *FACEBOOK LEAD RECEIVED!*\n\n"
@@ -168,3 +191,62 @@ async def _process_lead(leadgen_id: str) -> str:
     except Exception as exc:
         logger.error("Telegram send failed for lead %s: %s", leadgen_id, exc)
         return "telegram_error"
+
+
+async def _process_messenger_event(event: dict) -> None:
+    """Handle a single Messenger messaging event.
+    
+    Only notifies Telegram on the FIRST message from each new sender.
+    Ignores echoes (messages sent BY the page), delivery receipts, and reads.
+    """
+    try:
+        # Ignore echoes (messages sent by the page itself)
+        message = event.get("message", {})
+        if message.get("is_echo"):
+            return
+
+        # Ignore delivery/read receipts
+        if "delivery" in event or "read" in event:
+            return
+
+        sender_id = event.get("sender", {}).get("id", "")
+        if not sender_id:
+            return
+
+        # Only notify on FIRST message from this sender
+        if not _is_new_sender(sender_id):
+            logger.info("Messenger: returning sender %s, skipping notification.", sender_id)
+            return
+
+        logger.info("Messenger: NEW sender %s — sending Telegram notification.", sender_id)
+
+        # Get message text
+        message_text = message.get("text", "")
+
+        # Attachments (images, files, etc.)
+        attachments = message.get("attachments", [])
+        if attachments and not message_text:
+            attachment_types = [a.get("type", "unknown") for a in attachments]
+            message_text = f"[Attachment: {', '.join(attachment_types)}]"
+        elif attachments and message_text:
+            attachment_types = [a.get("type", "unknown") for a in attachments]
+            message_text += f"\n[+ Attachment: {', '.join(attachment_types)}]"
+
+        # Fetch sender's profile
+        profile = await fetch_sender_profile(sender_id)
+
+        # Format and send
+        telegram_msg = format_messenger_message(profile, message_text, sender_id)
+        await _send_telegram(telegram_msg)
+
+    except Exception as exc:
+        logger.error("Error processing Messenger event: %s", exc)
+        # Still try to notify with whatever we have
+        sender_id = event.get("sender", {}).get("id", "unknown")
+        fallback = (
+            f"💬 *New Messenger Contact!*\n\n"
+            f"🆔 Sender ID: `{sender_id}`\n"
+            f"⚠️ Could not process message details.\n"
+            f"Error: `{exc}`"
+        )
+        await _send_telegram(fallback)
