@@ -58,11 +58,12 @@ def _verify_signature(payload: bytes, signature_header: str) -> bool:
     return hmac.compare_digest(expected, signature_header[7:])
 
 
-async def _send_telegram(text: str) -> None:
+async def _send_telegram(text: str) -> int | None:
     """Send a message to Telegram via Bot API.
     
     If Markdown parse fails, retries without parse_mode so the message
     is always delivered even if formatting chars cause issues.
+    Returns the message_id on success, None on failure.
     """
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -78,10 +79,42 @@ async def _send_telegram(text: str) -> None:
             resp2 = await client.post(url, json=payload)
             if not resp2.is_success:
                 logger.error("Telegram send failed completely: %s", resp2.text)
+                return None
             else:
                 logger.info("Telegram message sent (plain text fallback).")
+                return resp2.json().get("result", {}).get("message_id")
         else:
             logger.info("Telegram message sent successfully.")
+            return resp.json().get("result", {}).get("message_id")
+
+
+async def _edit_telegram(message_id: int, new_text: str) -> None:
+    """Edit an existing Telegram message (to append SMS status).
+    
+    Silently fails if edit doesn't work — the original message is still there.
+    """
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "message_id": message_id,
+        "text": new_text,
+        "parse_mode": "Markdown",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, json=payload)
+            if not resp.is_success:
+                # Try without Markdown if formatting fails
+                payload.pop("parse_mode", None)
+                resp2 = await client.post(url, json=payload)
+                if resp2.is_success:
+                    logger.info("Telegram message edited (plain text).")
+                else:
+                    logger.warning("Telegram edit failed: %s", resp2.text)
+            else:
+                logger.info("Telegram message edited with SMS status.")
+    except Exception as exc:
+        logger.warning("Telegram edit error (non-critical): %s", exc)
 
 
 @app.get("/health")
@@ -188,12 +221,13 @@ async def _process_lead(leadgen_id: str) -> str:
 
     try:
         logger.info("Sending Telegram message for lead %s", leadgen_id)
-        await _send_telegram(message)
+        msg_id = await _send_telegram(message)
     except Exception as exc:
         logger.error("Telegram send failed for lead %s: %s", leadgen_id, exc)
         return "telegram_error"
 
     # ── Auto-SMS via RingCentral (never affects Telegram flow) ──
+    sms_status = "⏭ Skipped (no phone)"
     try:
         from graph import _safe_field_value
         field_map = {}
@@ -215,13 +249,21 @@ async def _process_lead(leadgen_id: str) -> str:
             )
             sent = await send_sms(to=phone, message=sms_text)
             if sent:
+                sms_status = f"✅ Sent to {phone}"
                 logger.info("SMS sent to %s for lead %s", phone, leadgen_id)
             else:
-                logger.info("SMS skipped/failed for lead %s (phone: %s)", leadgen_id, phone)
+                sms_status = f"❌ Failed ({phone})"
+                logger.info("SMS failed for lead %s (phone: %s)", leadgen_id, phone)
         else:
             logger.info("No phone number for lead %s — SMS skipped.", leadgen_id)
     except Exception as exc:
+        sms_status = f"❌ Error: {exc}"
         logger.warning("SMS error for lead %s (non-critical): %s", leadgen_id, exc)
+
+    # ── Edit Telegram message to show SMS result ──
+    if msg_id:
+        updated_message = message + f"\n\n📱 SMS: {sms_status}"
+        await _edit_telegram(msg_id, updated_message)
 
     return "sent_ok"
 
