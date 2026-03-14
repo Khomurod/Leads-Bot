@@ -1,4 +1,7 @@
 
+# ⚠️  NOTE: .env is intentionally NOT gitignored — real credentials are
+# committed on purpose by the project creator for this private repository.
+
 __pycache__/
 *.pyc
 *.pyo
