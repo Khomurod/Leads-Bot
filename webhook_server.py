@@ -2,6 +2,7 @@
 FastAPI webhook server.
 - GET  /webhook          → Facebook verification challenge
 - POST /webhook          → Receive lead notifications + Messenger messages
+- POST /rc-webhook       → RingCentral incoming SMS notifications
 - GET  /health           → Render health check
 - GET  /retry/{lead_id}  → Re-fetch and resend a failed lead
 """
@@ -9,14 +10,15 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 from collections import OrderedDict
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 
 from config import META_APP_SECRET, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, WEBHOOK_VERIFY_TOKEN
 from graph import fetch_lead, format_lead_message, fetch_sender_profile, format_messenger_message
-from sms import send_sms
+from sms import send_sms, register_sms_webhook
 
 import httpx
 
@@ -24,6 +26,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Leads Webhook")
+
+# ── Public base URL (for RingCentral webhook callback) ────────
+BASE_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://leads-bot-e6x5.onrender.com")
 
 # ── De-duplication: track seen Messenger senders ──────────────────
 # Only notify on the FIRST message from each new sender.
@@ -117,8 +122,72 @@ async def _edit_telegram(message_id: int, new_text: str) -> None:
         logger.warning("Telegram edit error (non-critical): %s", exc)
 
 
+# ── Startup: register RingCentral webhook ────────────────────
+@app.on_event("startup")
+async def _startup_register_rc_webhook():
+    """Register RingCentral webhook subscription on app start."""
+    callback = f"{BASE_URL}/rc-webhook"
+    logger.info("Registering RingCentral SMS webhook → %s", callback)
+    await register_sms_webhook(callback)
+
+
 @app.get("/health")
 async def health():
+    return {"status": "ok"}
+
+
+@app.post("/rc-webhook")
+async def rc_webhook(request: Request):
+    """Receive RingCentral webhook events (incoming SMS replies).
+
+    Handles two scenarios:
+    1. Validation handshake — RC sends Validation-Token header, we echo it back.
+    2. Incoming SMS event — we forward the reply to Telegram.
+    """
+    # ── Validation handshake ──
+    validation_token = request.headers.get("Validation-Token", "")
+    if validation_token:
+        logger.info("RingCentral webhook validation received — echoing token.")
+        return Response(
+            status_code=200,
+            headers={"Validation-Token": validation_token},
+        )
+
+    # ── Process incoming event ──
+    try:
+        body = await request.json()
+        logger.info("RingCentral webhook event: %s", json.dumps(body, indent=2)[:500])
+
+        event_body = body.get("body", {})
+
+        # Only process inbound SMS (ignore outbound / delivery status)
+        direction = event_body.get("direction", "")
+        msg_type = event_body.get("type", "")
+        if direction != "Inbound" or msg_type != "SMS":
+            logger.info("RC webhook: ignoring non-inbound-SMS event (direction=%s, type=%s).", direction, msg_type)
+            return {"status": "ignored"}
+
+        # Extract sender and message
+        from_number = event_body.get("from", {}).get("phoneNumber", "Unknown")
+        to_number = event_body.get("to", [{}])[0].get("phoneNumber", "Unknown") if event_body.get("to") else "Unknown"
+        subject = event_body.get("subject", "(no text)")
+        created = event_body.get("creationTime", "")
+
+        # Format and send to Telegram
+        telegram_msg = (
+            f"\U0001F4E9 *SMS Reply Received!*\n\n"
+            f"\U0001F4DE From: `{from_number}`\n"
+            f"\U0001F4AC Message: {subject}\n"
+        )
+        if created:
+            telegram_msg += f"\n\U0001F550 Received: {created}"
+
+        await _send_telegram(telegram_msg)
+        logger.info("SMS reply from %s forwarded to Telegram.", from_number)
+
+    except Exception as exc:
+        logger.error("Error processing RingCentral webhook: %s", exc)
+
     return {"status": "ok"}
 
 

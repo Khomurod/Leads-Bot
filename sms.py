@@ -83,3 +83,61 @@ async def send_sms(to: str, message: str) -> bool:
     except Exception as exc:
         logger.error("SMS send error to %s: %s", to, exc)
         return False
+
+
+async def register_sms_webhook(callback_url: str) -> bool:
+    """Register a RingCentral webhook subscription for incoming SMS.
+
+    Creates a subscription so RingCentral POSTs to callback_url
+    whenever an SMS is received on Tom's number.
+    Returns True on success, False on failure. Never raises.
+    """
+    if not all([RC_CLIENT_ID, RC_CLIENT_SECRET, RC_JWT_TOKEN]):
+        logger.info("RingCentral not configured — skipping webhook registration.")
+        return False
+
+    try:
+        token = await _get_access_token()
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # Check for existing subscriptions to avoid duplicates
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://platform.ringcentral.com/restapi/v1.0/subscription",
+                headers=headers,
+            )
+            if resp.is_success:
+                subs = resp.json().get("records", [])
+                for sub in subs:
+                    delivery = sub.get("deliveryMode", {})
+                    if delivery.get("address", "") == callback_url:
+                        logger.info("RingCentral webhook already registered at %s (ID: %s).", callback_url, sub.get("id"))
+                        return True
+
+            # Create new subscription
+            payload = {
+                "eventFilters": [
+                    "/restapi/v1.0/account/~/extension/~/message-store/instant?type=SMS"
+                ],
+                "deliveryMode": {
+                    "transportType": "WebHook",
+                    "address": callback_url,
+                },
+                "expiresIn": 630720000,  # ~20 years (max allowed will be applied by RC)
+            }
+            resp = await client.post(
+                "https://platform.ringcentral.com/restapi/v1.0/subscription",
+                json=payload,
+                headers=headers,
+            )
+            if resp.is_success:
+                sub_id = resp.json().get("id", "?")
+                logger.info("RingCentral webhook subscription created (ID: %s) → %s", sub_id, callback_url)
+                return True
+            else:
+                logger.warning("RingCentral webhook registration failed (%s): %s", resp.status_code, resp.text[:300])
+                return False
+
+    except Exception as exc:
+        logger.error("RingCentral webhook registration error: %s", exc)
+        return False
