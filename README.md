@@ -1,6 +1,6 @@
 # Facebook Leads → Telegram Bot
 
-Receives Facebook Lead Ads via webhook and instantly forwards them to Telegram.
+Receives Facebook Lead Ads and Messenger conversations via webhook, forwards them to Telegram, and auto-sends SMS responses to leads via RingCentral.
 
 ## Live Deployment
 
@@ -12,10 +12,17 @@ Receives Facebook Lead Ads via webhook and instantly forwards them to Telegram.
 ## How It Works
 
 ```
-User submits Lead Ad form
+Lead Ad Form Submission:
     → Facebook sends webhook POST to /webhook
     → Bot fetches full lead from Graph API
     → Formatted message sent to Telegram
+    → SMS auto-sent to lead via RingCentral
+    → Telegram message edited with SMS status (✅ Sent / ❌ Failed)
+
+Messenger Conversation (first message only):
+    → Facebook sends webhook POST to /webhook
+    → Bot fetches sender's profile from Graph API
+    → Notification sent to Telegram with name + message preview
 ```
 
 ## API Endpoints
@@ -41,16 +48,18 @@ Expected response: `{"status":"ok","lead_id":"...","result":"sent_ok"}`
 
 ```
 Leads-Bot/
-├── main.py             # Entry point (starts uvicorn on $PORT)
-├── webhook_server.py   # FastAPI routes + lead processing pipeline
-├── graph.py            # Meta Graph API fetcher + message formatter
-├── config.py           # Environment variable loader (uses .env locally)
-├── requirements.txt    # Python dependencies
-├── render.yaml         # Render deployment config
-├── .env                # Local secrets (gitignored — NEVER commit)
+├── main.py               # Entry point (starts uvicorn on $PORT)
+├── webhook_server.py     # FastAPI routes + lead/messenger processing
+├── graph.py              # Meta Graph API fetcher + message formatter
+├── sms.py                # RingCentral SMS sender (auto-response)
+├── config.py             # Environment variable loader (uses .env locally)
+├── requirements.txt      # Python dependencies
+├── render.yaml           # Render deployment config
+├── SMSsendingfeature.md  # SMS feature documentation
+├── .env                  # Local secrets (gitignored — NEVER commit)
 ├── .gitignore
-├── README.md           # This file
-└── SETUP.md            # Full step-by-step setup guide
+├── README.md             # This file
+└── SETUP.md              # Full step-by-step setup guide
 ```
 
 ## Environment Variables
@@ -60,11 +69,15 @@ Leads-Bot/
 | Variable | Value | Description |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | `8626796769:AAE7e6...` | From @BotFather |
-| `TELEGRAM_CHAT_ID` | `2117922421` | Your Telegram chat ID |
-| `WEBHOOK_VERIFY_TOKEN` | `my_super_secret_verify_token_123` | Chosen secret — must match Meta App webhook config |
+| `TELEGRAM_CHAT_ID` | `-5231255301` | Telegram group chat ID |
+| `WEBHOOK_VERIFY_TOKEN` | `my_super_secret_verify_token_123` | Must match Meta App webhook config |
 | `META_APP_SECRET` | `174654afba5dc1a3ccdc3afcdbd4d6ca` | Meta App Dashboard → Settings → Basic |
 | `META_PAGE_ACCESS_TOKEN` | `EAAVOuBdPjIwBQ7...` | System User permanent token (never expires) |
 | `PORT` | `8000` | Optional — defaults to 8000 |
+| `RC_CLIENT_ID` | `064d826d04230f...` | RingCentral Client ID (optional — leave empty to disable SMS) |
+| `RC_CLIENT_SECRET` | `19673522391675...` | RingCentral Client Secret |
+| `RC_JWT_TOKEN` | `ec9c3412206a1a...` | RingCentral JWT Token |
+| `RC_FROM_NUMBER` | `+14702374510` | RingCentral SMS sender number |
 
 > ⚠️ **Real values are in `.env` (local) and Render Environment Variables.** See `.env` file in the project root.
 
@@ -107,7 +120,8 @@ Once active you'll see `GET /health 200` entries in Render logs every 10 minutes
 | App Mode | **Live** (published) |
 | Webhook Callback URL | `https://leads-bot-e6x5.onrender.com/webhook` |
 | Webhook Verify Token | `my_super_secret_verify_token_123` |
-| Webhook Subscribed Field | `leadgen` (under Page object) |
+| Webhook Subscribed Fields | `leadgen`, `messages` (under Page object) |
+| Use Cases | Capture & manage ad leads, Respond to messages |
 | Business Portfolio | Wenze (ID: `1373179280914689`) |
 
 ## Page Access Token — System User
@@ -120,7 +134,7 @@ The token is generated via a **System User** (never expires):
 | Role | Admin |
 | Business | Wenze |
 | Page | Wenze Transportation Sevices |
-| Token Permissions | `leads_retrieval`, `pages_manage_metadata`, `pages_read_engagement`, `pages_show_list` |
+| Token Permissions | `leads_retrieval`, `pages_manage_metadata`, `pages_read_engagement`, `pages_show_list`, `pages_messaging` |
 
 > To regenerate the token: Business Settings → System Users → wenzeleadsbot → Generate New Token
 
@@ -142,6 +156,10 @@ LeadsBot must be listed as an authorized CRM in the page's Lead Access Manager:
 | Telegram 401 Unauthorized | Bot token expired/revoked | Regenerate token via @BotFather, update `TELEGRAM_BOT_TOKEN` on Render |
 | `KeyError: 'values'` | Field has no values (e.g. `inbox_url` empty) | Fixed in `graph.py` — all fields use `.get()` safely |
 | Telegram message not formatting | Markdown special chars in lead data | `_send_telegram()` retries in plain text if Markdown fails |
+| SMS not sending | RingCentral credentials missing or JWT truncated | Check all 4 `RC_*` env vars are set on Render with full values |
+| SMS shows ❌ Failed | RingCentral auth error or invalid phone | Check Render logs for specific error message |
+| Messenger leads not arriving | `messages` field not subscribed | Webhooks dashboard → Page → subscribe `messages` field |
+| Duplicate Messenger notifications | Same sender messaging again | By design — only first message triggers notification |
 
 ## Future Roadmap: Multi-Client Support
 
