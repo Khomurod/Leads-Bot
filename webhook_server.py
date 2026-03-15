@@ -125,10 +125,20 @@ async def _edit_telegram(message_id: int, new_text: str) -> None:
 # ── Startup: register RingCentral webhook ────────────────────
 @app.on_event("startup")
 async def _startup_register_rc_webhook():
-    """Register RingCentral webhook subscription on app start."""
-    callback = f"{BASE_URL}/rc-webhook"
-    logger.info("Registering RingCentral SMS webhook → %s", callback)
-    await register_sms_webhook(callback)
+    """Register RingCentral webhook subscription after a short delay.
+
+    Runs as a background task with a 3s delay so uvicorn is fully
+    listening before RingCentral tries to validate /rc-webhook.
+    """
+    import asyncio
+
+    async def _delayed_register():
+        await asyncio.sleep(3)  # Let uvicorn fully start before RC validates
+        callback = f"{BASE_URL}/rc-webhook"
+        logger.info("Registering RingCentral SMS webhook → %s", callback)
+        await register_sms_webhook(callback)
+
+    asyncio.create_task(_delayed_register())
 
 
 @app.get("/health")
