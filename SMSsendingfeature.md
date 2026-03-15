@@ -10,7 +10,7 @@
 
 When a new lead comes in (Lead Ad form OR Messenger), the bot will **automatically send an SMS** to the lead's phone number within seconds:
 
-> *"Hello {name}, this is Tom with Wenze trucking company and thanks for applying to us. Can I call you right now to explain the details?"*
+> *"Hello {name}, this is Tom with Wenze trucking company and thanks for applying to our OTR position. Can I call you right now to explain the details?"*
 
 This happens **after** the Telegram notification, so existing functionality is untouched.
 
